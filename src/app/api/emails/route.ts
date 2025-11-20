@@ -1,25 +1,36 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth.config';
 import connectDB from '@/lib/mongoose';
 import Email from '@/lib/models/email.model';
 
-export async function GET(request: NextRequest) {
+export async function GET(request: Request) {
   try {
-    await connectDB();
+    const session = await getServerSession(authOptions);
+    
+    if (!session || !session.user?.email) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
 
     const { searchParams } = new URL(request.url);
     const folder = searchParams.get('folder') || 'inbox';
-    const page = parseInt(searchParams.get('page') || '1');
     const limit = parseInt(searchParams.get('limit') || '50');
-    const skip = (page - 1) * limit;
+    const skip = parseInt(searchParams.get('skip') || '0');
 
-    // Build query
-    const query: any = { folder };
+    await connectDB();
 
-    // Fetch emails with pagination
+    const query: any = {
+      userId: session.user.email,
+      folder,
+    };
+
     const emails = await Email.find(query)
       .sort({ createdAt: -1 })
-      .skip(skip)
       .limit(limit)
+      .skip(skip)
       .lean();
 
     const total = await Email.countDocuments(query);
@@ -27,17 +38,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       emails,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
-      },
+      total,
+      hasMore: skip + limit < total,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error fetching emails:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch emails' },
+      { success: false, error: error.message || 'Failed to fetch emails' },
       { status: 500 }
     );
   }

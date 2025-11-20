@@ -1,14 +1,29 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth.config';
 import connectDB from '@/lib/mongoose';
 import Email from '@/lib/models/email.model';
-import smtpService from '@/lib/services/smtp';
+import { GmailService } from '@/lib/services/gmail-api';
 
-export async function POST(request: NextRequest) {
+export async function POST(request: Request) {
   try {
-    await connectDB();
+    const session = await getServerSession(authOptions);
+    
+    if (!session || !session.accessToken || !session.user?.email) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
 
-    const body = await request.json();
-    const { to, subject, text, html } = body;
+    if (session.error === 'RefreshAccessTokenError') {
+      return NextResponse.json(
+        { success: false, error: 'Token refresh failed. Please sign in again.' },
+        { status: 401 }
+      );
+    }
+
+    const { to, subject, text, html } = await request.json();
 
     if (!to || !subject) {
       return NextResponse.json(
@@ -17,34 +32,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Send email via SMTP
-    await smtpService.sendEmail({
-      to,
-      subject,
-      text,
-      html,
-    });
+    await connectDB();
 
-    // Save to database in sent folder
-    const email = await Email.create({
-      from: process.env.GMAIL_USER || '',
+    const gmailService = new GmailService(session.accessToken);
+    const messageId = await gmailService.sendMessage(to, subject, text, html);
+
+    // Save to sent folder
+    await Email.create({
+      userId: session.user.email,
+      messageId,
+      from: session.user.email,
       to,
       subject,
-      body: text || '',
+      body: text,
       htmlBody: html,
       folder: 'sent',
       isRead: true,
+      isStarred: false,
+      hasAttachments: false,
     });
 
     return NextResponse.json({
       success: true,
+      messageId,
       message: 'Email sent successfully',
-      email,
     });
-  } catch (error) {
-    console.error('Error sending email:', error);
+  } catch (error: any) {
+    console.error('❌ Error sending email:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to send email' },
+      { success: false, error: error.message || 'Failed to send email' },
       { status: 500 }
     );
   }

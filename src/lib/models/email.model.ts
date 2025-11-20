@@ -1,7 +1,8 @@
-import mongoose, { Schema, Document, Model } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IEmail extends Document {
-  messageId?: string;
+  userId: string;
+  messageId: string;
   from: string;
   to: string;
   subject: string;
@@ -17,46 +18,46 @@ export interface IEmail extends Document {
 
 const EmailSchema = new Schema<IEmail>(
   {
+    userId: {
+      type: String,
+      required: true,
+      index: true,
+    },
     messageId: {
       type: String,
+      required: true,
       unique: true,
-      sparse: true,
     },
     from: {
       type: String,
       required: true,
-      index: true,
     },
     to: {
       type: String,
       required: true,
-      index: true,
     },
     subject: {
       type: String,
-      required: true,
+      default: '',
     },
     body: {
       type: String,
-      required: true,
+      default: '',
     },
     htmlBody: {
       type: String,
     },
     folder: {
       type: String,
-      default: 'inbox',
-      index: true,
+      required: true,
     },
     isRead: {
       type: Boolean,
       default: false,
-      index: true,
     },
     isStarred: {
       type: Boolean,
       default: false,
-      index: true,
     },
     hasAttachments: {
       type: Boolean,
@@ -68,10 +69,8 @@ const EmailSchema = new Schema<IEmail>(
   }
 );
 
-// Create compound indexes for common queries
-EmailSchema.index({ folder: 1, createdAt: -1 });
-EmailSchema.index({ folder: 1, isRead: 1, createdAt: -1 });
+// Compound index for efficient user-specific queries
+EmailSchema.index({ userId: 1, folder: 1, createdAt: -1 });
+EmailSchema.index({ userId: 1, isStarred: 1 });
 
-const Email: Model<IEmail> = mongoose.models.Email || mongoose.model<IEmail>('Email', EmailSchema);
-
-export default Email;
+export default mongoose.models.Email || mongoose.model<IEmail>('Email', EmailSchema);

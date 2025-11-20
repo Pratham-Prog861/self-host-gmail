@@ -1,52 +1,75 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth.config';
 import connectDB from '@/lib/mongoose';
 import Email from '@/lib/models/email.model';
-import imapService from '@/lib/services/imap';
+import { GmailService } from '@/lib/services/gmail-api';
 
-export async function POST(request: NextRequest) {
+export async function POST() {
   try {
+    const session = await getServerSession(authOptions);
+    
+    if (!session || !session.accessToken || !session.user?.email) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    if (session.error === 'RefreshAccessTokenError') {
+      return NextResponse.json(
+        { success: false, error: 'Token refresh failed. Please sign in again.' },
+        { status: 401 }
+      );
+    }
+
     await connectDB();
 
-    // Fetch emails from Gmail IMAP
-    const emails = await imapService.fetchEmails('INBOX', 50);
+    const gmailService = new GmailService(session.accessToken);
+    const messageIds = await gmailService.listMessages(50);
 
-    // Save emails to MongoDB
-    const savedEmails = [];
-    for (const email of emails) {
-      try {
-        // Check if email already exists
-        const existingEmail = email.messageId
-          ? await Email.findOne({ messageId: email.messageId })
-          : null;
+    let newEmailsCount = 0;
 
-        if (!existingEmail) {
-          const newEmail = await Email.create({
-            messageId: email.messageId,
-            from: email.from,
-            to: email.to,
-            subject: email.subject,
-            body: email.body,
-            htmlBody: email.htmlBody,
-            folder: 'inbox',
-            hasAttachments: email.hasAttachments,
-            createdAt: email.date,
-          });
-          savedEmails.push(newEmail);
-        }
-      } catch (error) {
-        console.error('Error saving email:', error);
+    for (const messageId of messageIds) {
+      // Check if email already exists for this user
+      const existingEmail = await Email.findOne({
+        userId: session.user.email,
+        messageId,
+      });
+
+      if (existingEmail) {
+        continue;
       }
+
+      const emailData = await gmailService.getMessage(messageId);
+
+      await Email.create({
+        userId: session.user.email,
+        messageId: emailData.messageId,
+        from: emailData.from,
+        to: emailData.to,
+        subject: emailData.subject,
+        body: emailData.body,
+        htmlBody: emailData.htmlBody,
+        folder: 'inbox',
+        isRead: false,
+        isStarred: false,
+        hasAttachments: emailData.hasAttachments,
+        createdAt: emailData.date,
+      });
+
+      newEmailsCount++;
     }
 
     return NextResponse.json({
       success: true,
-      message: `Synced ${savedEmails.length} new emails`,
-      count: savedEmails.length,
+      count: newEmailsCount,
+      message: `Synced ${newEmailsCount} new emails`,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error syncing emails:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to sync emails' },
+      { success: false, error: error.message || 'Failed to sync emails' },
       { status: 500 }
     );
   }
